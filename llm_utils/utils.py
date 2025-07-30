@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import base64
 import asyncio
 
@@ -27,3 +28,27 @@ def dump_jsonl(data, file_path):
         else:
             jsonl_file.write(json.dumps(data, ensure_ascii=False, indent=None) + '\n')
     return
+
+
+def sample_list(lst: list, k: int, mode="uniform"):
+    # 从list中采样k个元素并保序返回，uniform模式保证每次返回结果一致
+    if not lst:
+        return []
+    
+    if k < 0:
+        raise ValueError("采样数量k不能为负数")
+    if k > len(lst):
+        raise ValueError("采样数量k不能大于列表长度")
+    if k == 0:
+        return []
+    
+    if mode == "uniform":
+        if k == 1:
+            return [lst[0]]
+        indices = [i * len(lst) // k for i in range(k)]
+    elif mode == "random":
+        indices = sorted(random.sample(range(len(lst)), k))
+    else:
+        raise ValueError("模式必须是 'random' 或 'uniform'")
+    
+    return [lst[i] for i in indices]
