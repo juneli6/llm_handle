@@ -7,6 +7,7 @@ def remove_think(text):
     pattern = r'<think>.*?</think>'
     return re.sub(pattern, '', text, flags=re.DOTALL)
 
+
 def find_first_json(text):
     stack = []
     start_index = -1
@@ -69,3 +70,21 @@ def extract_json(output_text):
     except JSONDecodeError as e:
         print(f"修复json...")
         return repair_and_parse_json(json_str)
+
+
+def extract_TFA(output_text: str):
+    output_text = remove_think(output_text)
+    Thought = output_text.split("Thought:")[-1].split("Final Answer:")[0].strip()
+    Final_Answer = output_text.split("Final Answer:")[-1].strip()
+    return Thought, Final_Answer
+
+
+def extract_yesno(output_text: str):
+    output_text = remove_think(output_text)
+    output_text = output_text.lower()
+    if "no" in output_text:
+        return "no"
+    elif "yes" in output_text:
+        return "yes"
+    else:
+        return "no"

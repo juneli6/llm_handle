@@ -1,8 +1,10 @@
 import os
 import json
 import random
+import hashlib
 import base64
 import asyncio
+
 
 def load_json(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -52,3 +54,9 @@ def sample_list(lst: list, k: int, mode="uniform"):
         raise ValueError("模式必须是 'random' 或 'uniform'")
     
     return [lst[i] for i in indices]
+
+
+def get_sha256(input_str: str) -> str:
+    hasher = hashlib.sha256()
+    hasher.update(input_str.encode('utf-8'))
+    return hasher.hexdigest()
