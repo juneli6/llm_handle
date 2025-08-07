@@ -4,6 +4,7 @@ import random
 import hashlib
 import base64
 import asyncio
+from datetime import datetime, timedelta
 
 
 def load_json(file_path):
@@ -60,3 +61,28 @@ def get_sha256(input_str: str) -> str:
     hasher = hashlib.sha256()
     hasher.update(input_str.encode('utf-8'))
     return hasher.hexdigest()
+
+
+class DateHandle:
+
+    @staticmethod
+    def get_random_date(start: str, end: str) -> str:
+        """ 获得指定范围内的随机日期 YYYYMMDD 格式，包含start和end
+        """
+        start_date = datetime.strptime(start, "%Y%m%d")
+        end_date = datetime.strptime(end, "%Y%m%d")
+        if start_date > end_date:
+            raise ValueError("Start date must be earlier than or equal to end date")
+        delta = (end_date - start_date).days
+        random_days = random.randint(0, delta)
+        random_date = start_date + timedelta(days=random_days)
+        return random_date.strftime("%Y%m%d")
+
+    @staticmethod
+    def shift_date(base_date: str, days: int) -> str:
+        """ 根据基准日期计算偏移后的日期 YYYYMMDD
+        """
+        base_datetime = datetime.strptime(base_date, "%Y%m%d")
+        offset_date = base_datetime + timedelta(days=days)
+        return offset_date.strftime("%Y%m%d")
+

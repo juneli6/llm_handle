@@ -38,6 +38,41 @@ def find_first_json(text):
                     return text[start_index:i + 1]
     return None
 
+def find_last_json(text):
+    stack = []
+    end_index = -1  # 记录最后一个完整JSON的结束位置（闭括号位置）
+    
+    # 从后向前遍历字符串
+    for i in range(len(text)-1, -1, -1):
+        char = text[i]
+        
+        # 栈为空时遇到闭括号：记录结束位置并初始化栈
+        if not stack and char in ']}':
+            # 压入对应的开括号类型（反向匹配时使用）
+            stack.append('{' if char == '}' else '[')
+            end_index = i  # 记录结束位置
+            continue
+        
+        # 处理栈非空的情况
+        if stack:
+            if char in ']}':
+                # 遇到闭括号则压入对应的开括号
+                stack.append('{' if char == '}' else '[')
+            elif char in '{[':
+                # 遇到开括号时检查是否匹配
+                if char == stack[-1]:
+                    stack.pop()  # 括号匹配成功
+                    # 栈变空时表示找到完整的JSON
+                    if not stack:
+                        # 定位实际开始位置（从i到end_index）
+                        return text[i:end_index+1]
+                else:
+                    # 括号不匹配，重置状态
+                    stack = []
+                    end_index = -1
+    
+    return None  # 未找到有效JSON
+
 def repair_and_parse_json(json_str):
     try:
         # 修复1: 处理类似Python的None/True/False
@@ -61,8 +96,13 @@ def repair_and_parse_json(json_str):
             # 终极fallback：返回原始文本
             return json_str
 
-def extract_json(output_text):
-    json_str = find_first_json(output_text)
+def extract_json(output_text, loc="last"):
+    if loc == "last":
+        json_str = find_last_json(output_text)
+    elif loc == "first":
+        json_str = find_first_json(output_text)
+    else:
+        raise ValueError("loc 错误")
     if not json_str:
         return None
     try:
