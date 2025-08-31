@@ -1,0 +1,16 @@
+# IDE/编辑器配置
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Python 编译文件
+__pycache__/
+*.py[cod]
+
+# Jupyter 检查点目录
+.ipynb_checkpoints/
+
+
+/test.ipynb
