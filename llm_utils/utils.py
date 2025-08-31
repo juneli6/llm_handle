@@ -5,6 +5,10 @@ import hashlib
 import base64
 import asyncio
 from datetime import datetime, timedelta
+try:
+    from transformers import AutoTokenizer, PreTrainedTokenizer
+except:
+    pass
 
 
 def load_json(file_path):
@@ -85,4 +89,40 @@ class DateHandle:
         base_datetime = datetime.strptime(base_date, "%Y%m%d")
         offset_date = base_datetime + timedelta(days=days)
         return offset_date.strftime("%Y%m%d")
+
+
+class Tokenizer_Handle:
+
+    def __init__(self, tokenizer):
+        if isinstance(tokenizer, str):
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+        self.tokenizer: PreTrainedTokenizer = tokenizer
+    
+    def count_tokens(self, text: str|list[str], add_special_tokens = False) -> int|list[int]:
+        """ str -> int | list -> list
+        """
+        encoded = self.tokenizer(text, 
+                                 add_special_tokens=add_special_tokens, 
+                                 return_length=True)
+        token_lengths = encoded["length"]
+
+        if isinstance(text, str):
+            assert len(token_lengths) == 1
+            return token_lengths[0]
+        elif isinstance(text, list):
+            return token_lengths
+        else:
+            raise ValueError(f"type(text) = {type(text)}")
+    
+    def cut_by_token_len(self, text: str|list[str], max_tokens: int) -> str|list[str]:
+        """ str -> str | list -> list
+        """
+        text_lst = [text] if isinstance(text, str) else text
+        encoded: list[list[int]] = self.tokenizer(text=text_lst, add_special_tokens=False, padding=False, truncation=True, max_length=max_tokens)["input_ids"]
+        text_lst_truncated = self.tokenizer.batch_decode(encoded, skip_special_tokens=False)
+        if isinstance(text, str):
+            assert len(text_lst_truncated) == 1
+            return text_lst_truncated[0]
+        else:
+            return text_lst_truncated
 
