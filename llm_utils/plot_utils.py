@@ -102,30 +102,41 @@ class Sunburst_Handle:
         return align_dict(nested_dict, 0, max_depth)
     
     @staticmethod
-    def nested_dict_to_sunburst(nested_dict, parent=''):
+    def nested_dict_to_sunburst(nested_dict, parent='', node_counter=None):
         """ 将嵌套字典转换为旭日图所需的 labels, parents, values
             nested_dict: dict[str, dict|float]
             parent: 当前层级的父节点名称（内部递归使用）
+            node_counter: 用于生成唯一节点ID的计数器
         """
+        if node_counter is None:
+            node_counter = {'count': 0}
+        
         labels = []
         parents = []
         values = []
         current_total = 0  # 当前字典的总值（所有直接子节点值之和）
 
         for key, value in nested_dict.items():
+            # 断言检查：确保键不包含分隔符
+            assert '~' not in str(key), f"键 '{key}' 包含保留分隔符 '~'，请修改键名"
+            
+            # 生成唯一节点ID
+            node_counter['count'] += 1
+            unique_key = f"{key}~{node_counter['count']}"
+            
             if isinstance(value, (int, float)):
                 # 叶子节点：直接添加
-                labels.append(key)
+                labels.append(unique_key)
                 parents.append(parent)
                 values.append(value)
                 current_total += value
             
             elif isinstance(value, dict):
                 # 递归处理子字典
-                child_labels, child_parents, child_values, child_total = Sunburst_Handle.nested_dict_to_sunburst(value, parent=key)
+                child_labels, child_parents, child_values, child_total = Sunburst_Handle.nested_dict_to_sunburst(value, parent=unique_key, node_counter=node_counter)
                 
                 # 添加当前分支节点（值为子字典的总值）
-                labels.append(key)
+                labels.append(unique_key)
                 parents.append(parent)
                 values.append(child_total)
                 current_total += child_total
@@ -138,6 +149,19 @@ class Sunburst_Handle:
         return labels, parents, values, current_total
 
     @staticmethod
+    def create_display_mapping(labels):
+        """ 创建显示名称映射，将唯一ID映射回原始名称 """
+        display_map = {}
+        for label in labels:
+            # 使用安全分隔符分割，恢复原始名称
+            if '~' in label:
+                original_name = label.split('~')[0]
+            else:
+                original_name = label
+            display_map[label] = original_name
+        return display_map
+
+    @staticmethod
     def plot_sunburst(nested_dict, title="", size=(600, 600), dpi=300, uniform_depth=True):
         """ 绘制旭日图
         """
@@ -145,15 +169,19 @@ class Sunburst_Handle:
             nested_dict = Sunburst_Handle.align_nested_dict(nested_dict)
         labels, parents, values, _ = Sunburst_Handle.nested_dict_to_sunburst(nested_dict)
         
+        # 创建显示名称映射
+        display_map = Sunburst_Handle.create_display_mapping(labels)
+        
         fig = go.Figure(go.Sunburst(
-            labels=labels,
+            labels=labels,  # 使用唯一ID确保图表正确渲染
             parents=parents,
             values=values,
             branchvalues="total", # 分支值=子节点值之和
             insidetextorientation='radial', # 内部文本沿径向排列
             textinfo="label+value", # 显示标签和数值
-            texttemplate='%{label}<br>%{value}', # 文本格式：标签+换行+值
-            hovertemplate='<b>%{label}</b><br>值: %{value}<br>占比: %{percentParent:.1%}<extra></extra>',
+            text=[display_map[label] for label in labels],  # 显示原始名称
+            texttemplate='%{text}<br>%{value}',
+            hovertemplate='<b>%{text}</b><br>值: %{value}<br>占比: %{percentParent:.1%}<extra></extra>',
             maxdepth=-1 # 显示所有层级
         ))
         
