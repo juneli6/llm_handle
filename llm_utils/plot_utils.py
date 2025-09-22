@@ -67,6 +67,20 @@ def plot_histogram(data:list[float], bin_width:float=None, x_range:tuple=None, y
 class Sunburst_Handle:
 
     @staticmethod
+    def set_values_to_one(nested_dict):
+        """ 将嵌套字典中的所有值都改为1
+        """
+        result = {}
+        
+        for key, value in nested_dict.items():
+            if isinstance(value, dict):
+                result[key] = Sunburst_Handle.set_values_to_one(value)
+            else:
+                result[key] = 1
+        
+        return result
+
+    @staticmethod
     def align_nested_dict(nested_dict):
         """ 将嵌套字典按照最大深度对齐，不足的复制最后一个叶子节点
         """
@@ -162,9 +176,11 @@ class Sunburst_Handle:
         return display_map
 
     @staticmethod
-    def plot_sunburst(nested_dict, title="", size=(600, 600), dpi=300, uniform_depth=True):
+    def plot_sunburst(nested_dict, title="", size=(600, 600), dpi=100, uniform_depth=True, ignore_values=False):
         """ 绘制旭日图
         """
+        if ignore_values:
+            nested_dict = Sunburst_Handle.set_values_to_one(nested_dict)
         if uniform_depth:
             nested_dict = Sunburst_Handle.align_nested_dict(nested_dict)
         labels, parents, values, _ = Sunburst_Handle.nested_dict_to_sunburst(nested_dict)
@@ -180,7 +196,7 @@ class Sunburst_Handle:
             insidetextorientation='radial', # 内部文本沿径向排列
             textinfo="label+value", # 显示标签和数值
             text=[display_map[label] for label in labels],  # 显示原始名称
-            texttemplate='%{text}<br>%{value}',
+            texttemplate='%{text}' if ignore_values else '%{text}<br>%{value}',
             hovertemplate='<b>%{text}</b><br>值: %{value}<br>占比: %{percentParent:.1%}<extra></extra>',
             maxdepth=-1 # 显示所有层级
         ))
