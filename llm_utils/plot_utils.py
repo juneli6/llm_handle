@@ -64,85 +64,125 @@ def plot_histogram(data:list[float], bin_width:float=None, x_range:tuple=None, y
     plt.show()
 
 
-def nested_dict_to_sunburst(nested_dict, parent=''):
-    """ 将嵌套字典转换为旭日图所需的 labels, parents, values
-        nested_dict: dict[str, dict|float]
-        parent: 当前层级的父节点名称（内部递归使用）
-    """
-    labels = []
-    parents = []
-    values = []
-    current_total = 0  # 当前字典的总值（所有直接子节点值之和）
+class Sunburst_Handle:
 
-    for key, value in nested_dict.items():
-        if isinstance(value, (int, float)):
-            # 叶子节点：直接添加
-            labels.append(key)
-            parents.append(parent)
-            values.append(value)
-            current_total += value
+    @staticmethod
+    def align_nested_dict(nested_dict):
+        """ 将嵌套字典按照最大深度对齐，不足的复制最后一个叶子节点
+        """
+        def get_max_depth(d, current_depth=0):
+            if not isinstance(d, dict):
+                return current_depth
+            
+            max_depth = current_depth
+            for value in d.values():
+                child_depth = get_max_depth(value, current_depth + 1)
+                max_depth = max(max_depth, child_depth)
+            
+            return max_depth
         
-        elif isinstance(value, dict):
-            # 递归处理子字典
-            child_labels, child_parents, child_values, child_total = nested_dict_to_sunburst(value, parent=key)
+        def align_dict(d, current_depth, max_depth):
+            if current_depth >= max_depth:
+                return d
             
-            # 添加当前分支节点（值为子字典的总值）
-            labels.append(key)
-            parents.append(parent)
-            values.append(child_total)
-            current_total += child_total
+            result = {}
+            for key, value in d.items():
+                if isinstance(value, dict):
+                    aligned_value = align_dict(value, current_depth + 1, max_depth)
+                    result[key] = aligned_value
+                else:
+                    if current_depth == max_depth - 1:
+                        result[key] = value
+                    else:
+                        result[key] = align_dict({key: value}, current_depth + 1, max_depth)
             
-            # 添加子字典的节点
-            labels.extend(child_labels)
-            parents.extend(child_parents)
-            values.extend(child_values)
+            return result
+        
+        max_depth = get_max_depth(nested_dict)
+        return align_dict(nested_dict, 0, max_depth)
     
-    return labels, parents, values, current_total
+    @staticmethod
+    def nested_dict_to_sunburst(nested_dict, parent=''):
+        """ 将嵌套字典转换为旭日图所需的 labels, parents, values
+            nested_dict: dict[str, dict|float]
+            parent: 当前层级的父节点名称（内部递归使用）
+        """
+        labels = []
+        parents = []
+        values = []
+        current_total = 0  # 当前字典的总值（所有直接子节点值之和）
 
+        for key, value in nested_dict.items():
+            if isinstance(value, (int, float)):
+                # 叶子节点：直接添加
+                labels.append(key)
+                parents.append(parent)
+                values.append(value)
+                current_total += value
+            
+            elif isinstance(value, dict):
+                # 递归处理子字典
+                child_labels, child_parents, child_values, child_total = Sunburst_Handle.nested_dict_to_sunburst(value, parent=key)
+                
+                # 添加当前分支节点（值为子字典的总值）
+                labels.append(key)
+                parents.append(parent)
+                values.append(child_total)
+                current_total += child_total
+                
+                # 添加子字典的节点
+                labels.extend(child_labels)
+                parents.extend(child_parents)
+                values.extend(child_values)
+        
+        return labels, parents, values, current_total
 
-def plot_sunburst(nested_dict, title="", size=(600, 600), dpi=300):
-    """ 绘制旭日图
-    """
-    labels, parents, values, _ = nested_dict_to_sunburst(nested_dict)
-    
-    fig = go.Figure(go.Sunburst(
-        labels=labels,
-        parents=parents,
-        values=values,
-        branchvalues="total", # 分支值=子节点值之和
-        insidetextorientation='radial', # 内部文本沿径向排列
-        textinfo="label+value", # 显示标签和数值
-        texttemplate='%{label}<br>%{value}', # 文本格式：标签+换行+值
-        hovertemplate='<b>%{label}</b><br>值: %{value}<br>占比: %{percentParent:.1%}<extra></extra>',
-        maxdepth=-1 # 显示所有层级
-    ))
-    
-    fig.update_layout(
-        margin=dict(t=50, l=0, r=0, b=0), 
-        title={
-            'text': title,
-            'y':0.95,  # 标题垂直位置
-            'x':0.5,   # 标题水平居中
-            'xanchor': 'center',
-            'yanchor': 'top',
-            'font': dict(size=16)  # 标题字体
-        },
-        height=size[1], # 图像高度
-        width=size[0], # 图像宽度
-        uniformtext=dict(minsize=10, mode='hide') # 文本最小字号，过小则隐藏
-    )
-    
-    fig.update_traces(
-        textfont_size=12,
-        marker=dict(line=dict(width=1, color='white'))  # 白色分隔线
-    )
+    @staticmethod
+    def plot_sunburst(nested_dict, title="", size=(600, 600), dpi=300, uniform_depth=True):
+        """ 绘制旭日图
+        """
+        if uniform_depth:
+            nested_dict = Sunburst_Handle.align_nested_dict(nested_dict)
+        labels, parents, values, _ = Sunburst_Handle.nested_dict_to_sunburst(nested_dict)
+        
+        fig = go.Figure(go.Sunburst(
+            labels=labels,
+            parents=parents,
+            values=values,
+            branchvalues="total", # 分支值=子节点值之和
+            insidetextorientation='radial', # 内部文本沿径向排列
+            textinfo="label+value", # 显示标签和数值
+            texttemplate='%{label}<br>%{value}', # 文本格式：标签+换行+值
+            hovertemplate='<b>%{label}</b><br>值: %{value}<br>占比: %{percentParent:.1%}<extra></extra>',
+            maxdepth=-1 # 显示所有层级
+        ))
+        
+        fig.update_layout(
+            margin=dict(t=50, l=0, r=0, b=0), 
+            title={
+                'text': title,
+                'y':0.95,  # 标题垂直位置
+                'x':0.5,   # 标题水平居中
+                'xanchor': 'center',
+                'yanchor': 'top',
+                'font': dict(size=16)  # 标题字体
+            },
+            height=size[1], # 图像高度
+            width=size[0], # 图像宽度
+            uniformtext=dict(minsize=10, mode='hide') # 文本最小字号，过小则隐藏
+        )
+        
+        fig.update_traces(
+            textfont_size=12,
+            marker=dict(line=dict(width=1, color='white'))  # 白色分隔线
+        )
 
-    # 计算DPI缩放因子 (72是默认DPI)
-    scale_factor = dpi / 72
-    
-    # 设置DPI（通过Plotly配置）
-    fig.show(config={'toImageButtonOptions': {
-        'format': 'png',
-        'scale': scale_factor
-    }})
+        # 计算DPI缩放因子 (72是默认DPI)
+        scale_factor = dpi / 72
+        
+        # 设置DPI（通过Plotly配置）
+        fig.show(config={'toImageButtonOptions': {
+            'format': 'png',
+            'scale': scale_factor
+        }})
 
