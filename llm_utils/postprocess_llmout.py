@@ -1,5 +1,6 @@
 import re
 import json
+import ast
 from json import JSONDecodeError
 
 
@@ -8,6 +9,26 @@ def remove_tag(text, tag="think"):
     """
     pattern = rf'<{tag}>.*?</{tag}>'
     return re.sub(pattern, '', text, flags=re.DOTALL)
+
+
+def extract_tag(text: str, tag: str = "tool_call", output: str = "last"):
+    """ 提取指定标签内的内容，非贪婪匹配
+    """
+    # 转义标签名，防止包含正则特殊字符
+    escaped_tag = re.escape(tag)
+    pattern = rf'<{escaped_tag}>(.*?)</{escaped_tag}>'
+    
+    matches: list[str] = re.findall(pattern, text, re.DOTALL)
+    
+    if not matches:
+        return ""
+    
+    if output == "first":
+        return matches[0]
+    elif output == "last":
+        return matches[-1]
+    else:
+        raise ValueError(f"output 参数指定错误：{output}")
 
 
 class JSON_Handle:
@@ -149,3 +170,79 @@ def extract_yesno(output_text: str):
         return "yes"
     else:
         return "no"
+
+
+def extract_toolcall(content: str):
+    def extract_code_from_string(text: str):
+        pattern = r"""
+            (?:["']code["'])    # 键名：双引号或单引号包裹的code
+            \s*:\s*             # 键分割符（允许空格）
+            (["'])              # 捕获开始引号（第1组）
+            ((?:(?!\1).|\\\1)*) # 捕获字符串内容（第2组）：允许转义引号
+            \1                  # 匹配结束引号（与开始引号相同）
+        """
+
+        match = re.search(pattern, text, re.VERBOSE | re.DOTALL) # 支持多行和任意字符
+
+        if not match:
+            raise ValueError("未找到有效的code字段")
+        
+        return match.group(2)
+    
+    def _is_valid_toolcall(obj) -> bool:
+        return (
+            isinstance(obj, dict) and 
+            'name' in obj and 
+            'arguments' in obj and
+            isinstance(obj.get('arguments'), dict)
+        )
+    
+    content = content.strip()
+    
+    # 1. 标准JSON解析
+    try:
+        result = json.loads(content)
+        if _is_valid_toolcall(result):
+            return result
+    except:
+        pass
+    
+    # 2. 尝试修复后的JSON解析
+    try:
+        result = JSON_Handle.repair_and_parse_json(content)
+        if _is_valid_toolcall(result):
+            return result
+    except:
+        pass
+
+    # 3. 安全字面值解析
+    try:
+        repaired = content
+        replacements = [
+            (r':\s*null\b', ': None'),
+            (r':\s*true\b', ': True'), 
+            (r':\s*false\b', ': False'),
+        ]
+        
+        for pattern, replacement in replacements:
+            repaired = re.sub(pattern, replacement, repaired)
+        
+        result = ast.literal_eval(repaired)
+        if _is_valid_toolcall(result):
+            return result
+    except:
+        pass
+
+    # 4. 特殊工具处理
+    if "exe_python" in content:
+        try:
+            result =  {
+                "name": "exe_python", 
+                "arguments": {"code": extract_code_from_string(content)}
+            }
+            if _is_valid_toolcall(result):
+                return result
+        except:
+            pass
+    
+    raise ValueError(f"提取tool call失败: {content}")
