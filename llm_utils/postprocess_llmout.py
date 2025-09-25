@@ -246,3 +246,27 @@ def extract_toolcall(content: str):
             pass
     
     raise ValueError(f"提取tool call失败: {content}")
+
+
+def extract_last_boxed(text: str):
+    """ 提取最后一个 "\\boxed{}" 中的内容，必须是双斜杠
+    """
+    start_key = r'\boxed{'
+    start_idx = text.rfind(start_key)
+
+    if start_idx == -1:
+        return None
+    
+    start_idx += len(start_key)
+    count = 1  # 括号计数器（已有一个左括号）
+    content_start = start_idx
+    
+    for i in range(start_idx, len(text)):
+        if text[i] == '{':
+            count += 1
+        elif text[i] == '}':
+            count -= 1
+            if count == 0:
+                return text[content_start:i]
+    
+    return None
