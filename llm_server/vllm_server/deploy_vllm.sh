@@ -1,0 +1,1 @@
+vllm serve $1

@@ -1,0 +1,126 @@
+import os
+import sys
+import json
+import time
+import asyncio
+import subprocess
+
+work_folder = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(work_folder)
+from llm_utils.llm_logger import llm_logger
+from llm_server.utils import dict_to_command_line_args, run_shell_script
+from llm_server.vllm_server.call_vllm_chat import send_request_vllm_chat
+
+
+# https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html#
+default_load_kwargs = {
+    "host": "127.0.0.1", 
+    "port": "8000", 
+    "model": "", 
+    "gpu-memory-utilization": "0.9", # This is a global gpu memory utilization limit, for example if 50% of the gpu memory is already used before vLLM starts and –gpu-memory-utilization is set to 0.9, then only 40% of the gpu memory will be allocated to the model executor.
+    "pipeline-parallel-size": "1", 
+    "tensor-parallel-size": "1", 
+
+    "dtype": "auto", # Data type for model weights and activations. Possible choices: auto, half, float16, bfloat16, float, float32
+    "kv-cache-dtype": "auto", 
+    "block-size": "16", 
+    "seed": "0", 
+    "max-logprobs": "20", 
+    "trust-remote-code": True, 
+
+    # "max-model-len": "8192", 
+    # "enable-prefix-caching": "<>", 
+    # "api-key": "vllm-01", 
+    # "limit-mm-per-prompt": "image=1,video=1", 
+}
+
+deploy_vllm_script_path = os.path.join(work_folder, "llm_server/vllm_server/deploy_vllm.sh")
+destroy_vllm_script_path = os.path.join(work_folder, "llm_server/vllm_server/destroy_vllm.sh")
+
+
+def test_if_available(url, api_key, model_name):
+    messages = [
+        {"role": "user", "content": "简单介绍一下你自己"}
+    ]
+    other_params = {
+        "max_tokens": 30
+    }
+    res = send_request_vllm_chat(url=url, api_key=api_key, model_name=model_name, messages=messages, other_params=other_params, timeout=15)
+
+    return res["status_code"], res["content"]
+
+
+async def deploy_llm(cuda_devices="0,1", load_kwargs={}):
+    default_load_kwargs.update(load_kwargs)
+    model_name_or_path = default_load_kwargs.pop("model")
+    if model_name_or_path == "":
+        raise ValueError("model_name_or_path 未传入")
+    default_load_kwargs_command = model_name_or_path + " " + dict_to_command_line_args(default_load_kwargs)
+
+    llm_logger.info(f"deploying {model_name_or_path}, load_kwargs is:")
+    llm_logger.info(json.dumps(default_load_kwargs, ensure_ascii=False, indent=2))
+    service_process = await run_shell_script(deploy_vllm_script_path, [default_load_kwargs_command], use_sudo=False, cuda_devices=cuda_devices)
+
+    while True:
+        await asyncio.sleep(30)
+        llm_logger.info("测试是否可访问")
+        host = default_load_kwargs.get("host", "127.0.0.1")
+        port = default_load_kwargs.get("port", "8000")
+        url = f"http://{host}:{port}/v1/chat/completions"
+        api_key = default_load_kwargs.get("api-key", "EMPTY")
+        
+        status_code, content = test_if_available(url, api_key, model_name_or_path)
+        if status_code == "200":
+            llm_logger.info(f"{model_name_or_path} 模型已部署")
+            llm_logger.info(json.dumps(content, ensure_ascii=False, indent=2))
+            break
+        else:
+            llm_logger.info(json.dumps(str(content), ensure_ascii=False, indent=2))
+
+    llm_logger.info("url:" + url)
+    llm_logger.info("api_key:" + api_key)
+    llm_logger.info("model_name_or_path:" + model_name_or_path)
+    return url, api_key, model_name_or_path
+
+
+def destroy_llm(mode="kill"):
+    """ kill - 终止进程
+        list - 仅查看
+    """
+    if mode == "list":
+        script_args = ["bash", destroy_vllm_script_path, "--list"]
+        llm_logger.info("destroy_llm 仅查看")
+    else:
+        script_args = ["bash", destroy_vllm_script_path]
+        llm_logger.warning("destroy_llm 终止进程")
+
+    try:
+        result = subprocess.run(script_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.stdout:
+            llm_logger.info(f"脚本输出:\n{result.stdout}")
+        if result.stderr:
+            llm_logger.error(f"脚本错误信息:\n{result.stderr}")
+        
+    except Exception as e:
+        llm_logger.error(f"调用 destroy_vllm.sh 失败: {e}")
+
+
+
+if __name__ == "__main__":
+    load_kwargs = {
+        "model": "/data/yuguangya/ALLYOUNEED/VL/Qwen2-VL-7B-Instruct", 
+        "host": "127.0.0.1", 
+        "port": "8000", 
+        # "api-key": "vllm-01", 
+        "gpu-memory-utilization": "0.5", 
+        "max-model-len": "32768", # 32768
+        "tensor-parallel-size": "1", 
+        "limit-mm-per-prompt": "image=2,video=1", 
+    }
+
+    asyncio.run(deploy_llm(cuda_devices="1", load_kwargs=load_kwargs))
+
+    # time.sleep(30)
+    # destroy_llm("list")
+    # time.sleep(10)
+    # destroy_llm("kill")
