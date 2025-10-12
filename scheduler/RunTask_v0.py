@@ -10,9 +10,57 @@ import multiprocessing
 from multiprocessing.managers import SyncManager
 from tqdm import tqdm
 from collections import defaultdict
+from functools import wraps
 
 from ..llm_utils.llm_logger import llm_logger
-from ..llm_utils.utils import load_jsonl, dump_jsonl
+
+
+
+def _load_jsonl(file_path):
+    with open(file_path, 'r', encoding='utf-8') as f:
+        data = f.readlines()
+    data = [json.loads(i) for i in data]
+    return data
+
+
+def _dump_jsonl(data, file_path):
+    with open(file_path, 'w', encoding='utf-8') as jsonl_file:
+        if isinstance(data, list):
+            for item in data:
+                jsonl_file.write(json.dumps(item, ensure_ascii=False, indent=None) + '\n')
+        else:
+            jsonl_file.write(json.dumps(data, ensure_ascii=False, indent=None) + '\n')
+    return
+
+
+def retry_on_error(num_retry=6, delay=1, backoff=2):
+    """ 重试装饰器 总共执行 1 + num_retry 次
+    Args:
+        num_retry: 重试次数
+        delay: 初始延迟时间(秒)
+        backoff: 延迟倍数
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            
+            for attempt in range(num_retry + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < num_retry:
+                        llm_logger.warning(f"Function {func.__name__} failed: {str(e)}. \nRetrying in {current_delay} seconds... ({attempt + 1}/{num_retry})")
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        llm_logger.error(f"Function {func.__name__} failed after {num_retry} retries. \nLast error: {str(e)}")
+            raise last_exception
+        
+        return wrapper
+    return decorator
 
 
 class ResourceIterator:
@@ -56,7 +104,8 @@ class RunTask(object):
             resource: dict[str, list] = None, 
             num_parallel: int = 1, 
             save_path: str = None, 
-            parallel_mode: str = "process" # "process" | "thread"
+            parallel_mode: str = "process", # "process" | "thread"
+            io_retry: bool = False
         ):
         """ work_func: 该函数在多个进程中执行，不能有全局变量
             f_input_data: list[dict]; dict:
@@ -88,6 +137,13 @@ class RunTask(object):
             assert item.get("headers") is not None and item["headers"].get("data_id") is not None
         assert save_path is not None and save_path.endswith(".jsonl")
         assert parallel_mode in ["process", "thread"]
+
+        if io_retry:
+            load_jsonl = retry_on_error(num_retry=6)(_load_jsonl)
+            dump_jsonl = retry_on_error(num_retry=6)(_dump_jsonl)
+        else:
+            load_jsonl = _load_jsonl
+            dump_jsonl = _dump_jsonl
 
 
         self.work_func = work_func
@@ -138,22 +194,51 @@ class RunTask(object):
             self.output_queue.put(json.dumps(output_item, ensure_ascii=False))
 
 
+    # def save_results(self):
+    #     save_folder = os.path.dirname(self.save_path)
+    #     if not os.path.exists(save_folder):
+    #         os.makedirs(save_folder)
+        
+    #     bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
+    #     with open(self.save_path, "a", encoding="utf-8") as f:
+    #         while True:
+    #             json_line = self.output_queue.get()
+    #             if json_line is None:
+    #                 break
+    #             f.write(str(json_line) + "\n")
+    #             f.flush()
+
+    #             bar.update(1)
+    #             bar.refresh()
+
     def save_results(self):
-        save_folder = os.path.dirname(self.save_path)
-        if not os.path.exists(save_folder):
-            os.makedirs(save_folder)
+        @retry_on_error(num_retry=6, delay=1, backoff=2)
+        def ensure_directory():
+            save_folder = os.path.dirname(self.save_path)
+            os.makedirs(save_folder, exist_ok=True)
         
         bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
-        with open(self.save_path, "a", encoding="utf-8") as f:
-            while True:
-                json_line = self.output_queue.get()
-                if json_line is None:
-                    break
-                f.write(str(json_line) + "\n")
-                f.flush()
 
-                bar.update(1)
-                bar.refresh()
+        try:
+            ensure_directory()
+            with open(self.save_path, "a", encoding="utf-8") as f:
+                while True:
+                    json_line = self.output_queue.get()
+                    if json_line is None:
+                        break
+                    
+                    try:
+                        f.write(str(json_line) + "\n")
+                        f.flush()
+                    except Exception as e:
+                        llm_logger.warning(f"写入数据失败，跳过该行: {e}")
+
+                    bar.update(1)
+                    bar.refresh()
+        
+        except Exception as e:
+            llm_logger.error(f"save 进程失败")
+            raise
 
 
     def start_process(self):
@@ -211,6 +296,8 @@ def hello_world(input_data: dict, prompt="提示词"):
     res = f"{prompt}:{resource}:{payload}"
     return "200", res
 
+
+
 if __name__ == '__main__':
     f_input_data = [
         {"headers": {"data_id": "1"}, "payload": {"content": "value1"}},
@@ -233,6 +320,7 @@ if __name__ == '__main__':
         resource=resource,
         num_parallel=3,
         save_path="output/output_test.jsonl",
-        parallel_mode="process" # process | thread
+        parallel_mode="process", # process | thread
+        io_retry=True
     )
     task.start()
