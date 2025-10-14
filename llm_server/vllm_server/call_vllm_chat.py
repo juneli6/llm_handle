@@ -74,15 +74,15 @@ def send_request_vllm_chat(
 
 if __name__ == "__main__":
     url = "http://localhost:8000/v1/chat/completions"
-    api_key = "vllm-01"
-    model_name="/data/yuguangya/ALLYOUNEED/VL/Qwen2-VL-7B-Instruct"
+    api_key = "vllm-00"
+    model_name=""
     other_params={
-        "temperature": 0,
+        "temperature": 0.95,
         "max_tokens": 100
     }
 
     messages_t=[
-        {"role": "system", "content": "你是一个nlp专家"}, 
+        {"role": "system", "content": "你是nlp专家"}, 
         {"role": "user", "content": "你是谁"}
     ]
 
