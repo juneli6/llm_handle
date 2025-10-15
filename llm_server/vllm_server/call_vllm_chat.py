@@ -8,7 +8,7 @@ def send_request_vllm_chat(
         url = None,
         api_key = None,
         model_name = None,
-        messages:list[dict] = None,
+        messages: list[dict] = None,
         other_params = None,
         timeout=(10, 120)
     ):
@@ -33,6 +33,8 @@ def send_request_vllm_chat(
         "logprobs": None, # Number of log probabilities to return per output token. When set to None, no probability is returned. If set to a non-None value, the result includes the log probabilities of the specified number of most likely tokens, as well as the chosen tokens. Note that the implementation follows the OpenAI API: The API will always return the log probability of the sampled token, so there may be up to logprobs+1 elements in the response.
         "prompt_logprobs": None, # Number of log probabilities to return per prompt token.
     }
+    if other_params is None:
+        other_params = {}
     default_other_params.update(other_params)
 
     headers = {
