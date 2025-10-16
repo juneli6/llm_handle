@@ -98,21 +98,43 @@ class Tokenizer_Handle:
             tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         self.tokenizer: PreTrainedTokenizer = tokenizer
     
-    def count_tokens(self, text: str|list[str], add_special_tokens = False) -> int|list[int]:
+    def count_tokens(
+            self, 
+            text: str|list[str] = None, 
+            add_special_tokens = False, # 对 text 生效
+            messages: list|list[list] = None, 
+            add_generation_prompt = True, # 对 messages 生效
+        ) -> int|list[int]:
         """ str -> int | list -> list
         """
-        encoded = self.tokenizer(text, 
-                                 add_special_tokens=add_special_tokens, 
-                                 return_length=True)
-        token_lengths = encoded["length"]
+        assert text or messages
+        if text:
+            encoded = self.tokenizer(text, 
+                                    add_special_tokens=add_special_tokens, 
+                                    return_length=True)
+            token_lengths = encoded["length"]
 
-        if isinstance(text, str):
-            assert len(token_lengths) == 1
-            return token_lengths[0]
-        elif isinstance(text, list):
-            return token_lengths
+            if isinstance(text, str):
+                assert len(token_lengths) == 1
+                return token_lengths[0]
+            elif isinstance(text, list):
+                return token_lengths
+            else:
+                raise ValueError(f"type(text) = {type(text)}")
         else:
-            raise ValueError(f"type(text) = {type(text)}")
+            encoded = self.tokenizer.apply_chat_template(messages, 
+                                                         tokenize=True, 
+                                                         add_generation_prompt=add_generation_prompt, 
+                                                         padding=False, 
+                                                         truncation=False
+                                                         )
+
+            if isinstance(messages[0], dict):
+                return len(encoded)
+            elif isinstance(messages[0], list):
+                return [len(i) for i in encoded]
+            else:
+                raise ValueError(f"type(messages[0]) = {type(messages[0])}")
     
     def cut_by_token_len(self, text: str|list[str], max_tokens: int) -> str|list[str]:
         """ str -> str | list -> list
