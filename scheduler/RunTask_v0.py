@@ -17,9 +17,19 @@ from ..llm_utils.llm_logger import llm_logger
 
 
 def _load_jsonl(file_path):
+    data = []
     with open(file_path, 'r', encoding='utf-8') as f:
-        data = f.readlines()
-    data = [json.loads(i) for i in data]
+        for line_num, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                print("Warning: 跳过空白行")
+                continue
+            try:
+                item = json.loads(line)
+                data.append(item)
+            except json.JSONDecodeError as e:
+                print(f"Warning: 第{line_num}行JSON解析失败: {e}。\n内容：{line}")
+                continue
     return data
 
 
@@ -105,7 +115,9 @@ class RunTask(object):
             num_parallel: int = 1, 
             save_path: str = None, 
             parallel_mode: str = "process", # "process" | "thread"
-            io_retry: bool = False
+            io_retry: bool = False, 
+            buffer_size: int = 1, # 缓冲区大小（条）
+            flush_interval: int = 30, # 强制刷新缓冲区的最大时间间隔（秒）
         ):
         """ work_func: 该函数在多个进程中执行，不能有全局变量
             f_input_data: list[dict]; dict:
@@ -152,6 +164,8 @@ class RunTask(object):
         self.parallel_mode = parallel_mode
         self.worker_name = "进程" if parallel_mode == "process" else "线程"
         self.output_queue = multiprocessing.Queue() if parallel_mode == "process" else queue.Queue()
+        self.buffer_size = buffer_size
+        self.flush_interval = flush_interval
 
 
         # self.f_input_data_grouped
@@ -217,28 +231,83 @@ class RunTask(object):
             save_folder = os.path.dirname(self.save_path)
             os.makedirs(save_folder, exist_ok=True)
         
+        def write_buffer(buffer, file_handle):
+            """写入缓冲区数据到已打开的文件"""
+            try:
+                for json_line in buffer:
+                    file_handle.write(str(json_line) + "\n")
+                file_handle.flush()
+                return True
+            except Exception as e:
+                llm_logger.warning(f"写入文件失败，文件句柄可能已失效: {e}")
+                return False
+        
         bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
-
+        
         try:
             ensure_directory()
-            with open(self.save_path, "a", encoding="utf-8") as f:
-                while True:
-                    json_line = self.output_queue.get()
-                    if json_line is None:
-                        break
-                    
+            
+            buffer = []
+            file_handle = None
+            last_flush_time = time.time()
+            
+            while True:
+                json_line = self.output_queue.get()
+                
+                if json_line is None:
+                    # 结束信号
+                    if buffer and file_handle:
+                        write_buffer(buffer, file_handle)
+                    break
+                
+                # 文件句柄不存在或已失效时，重新打开文件
+                if file_handle is None:
                     try:
-                        f.write(str(json_line) + "\n")
-                        f.flush()
+                        file_handle = open(self.save_path, "a", encoding="utf-8", buffering=-1)
+                        llm_logger.info("文件句柄已创建")
                     except Exception as e:
-                        llm_logger.warning(f"写入数据失败，跳过该行: {e}")
-
-                    bar.update(1)
-                    bar.refresh()
+                        llm_logger.error(f"无法打开文件: {e}")
+                        # 将数据放回队列，稍后重试
+                        self.output_queue.put(json_line)
+                        time.sleep(3)
+                        continue
+                
+                buffer.append(json_line)
+                
+                # 缓冲区达到指定大小或超过刷新间隔时，写入文件
+                current_time = time.time()
+                if len(buffer) >= self.buffer_size or (current_time - last_flush_time) >= self.flush_interval:
+                    success = write_buffer(buffer, file_handle)
+                    if success:
+                        bar.update(len(buffer))
+                        bar.refresh()
+                        buffer = []
+                        last_flush_time = current_time
+                    else:
+                        # 写入失败，关闭文件句柄，下次循环会重新打开
+                        try:
+                            file_handle.close()
+                        except:
+                            pass
+                        file_handle = None
         
         except Exception as e:
-            llm_logger.error(f"save 进程失败")
+            llm_logger.error(f"save 进程失败: {e}")
+            # 尝试保存缓冲区中的数据
+            if buffer and file_handle:
+                try:
+                    write_buffer(buffer, file_handle)
+                except Exception as save_e:
+                    llm_logger.error(f"异常时保存缓冲区数据失败: {save_e}")
             raise
+
+        finally:
+            if file_handle:
+                try:
+                    file_handle.close()
+                except:
+                    pass
+            bar.close()
 
 
     def start_process(self):
