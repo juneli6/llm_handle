@@ -142,6 +142,8 @@ class RunTask(object):
                     "payload": {...}
                 }
             work_func 必须的输出: status_code: str, res
+
+            buffer_size > 1 时，保存的结果注意按照 data_id 去重，防止极端情况有重复保存的数据
         """
         # 参数
         assert work_func is not None and f_input_data is not None
