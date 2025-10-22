@@ -1,10 +1,12 @@
+import os
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import numpy as np
 
 
 def plot_histogram(data:list[float], bin_width:float=None, x_range:tuple=None, y_range:tuple=None, 
-                   show_values:bool=True, figsize=(10, 6), dpi=100):
+                   show_values:bool=True, figsize=(10, 6), dpi=100, title:str='Histogram', 
+                   save_path:str=None):
     """
         绘制直方图
         data: 输入数据列表
@@ -56,11 +58,88 @@ def plot_histogram(data:list[float], bin_width:float=None, x_range:tuple=None, y
     # 添加标签和标题
     ax.set_xlabel('Value', fontsize=12)
     ax.set_ylabel('Frequency', fontsize=12)
-    ax.set_title('Histogram', fontsize=14)
+    ax.set_title(title, fontsize=14)
     
     # 网格线和布局调整
     plt.grid(axis='y', alpha=0.75)
     plt.tight_layout()
+
+    # 保存图像
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"图像已保存至: {save_path}")
+
+    plt.show()
+
+
+def plot_bar_chart(data: dict[str, int|float], orientation: str = 'vertical', xlabel_rotation: float = 0,
+                   title: str = 'Bar Chart', xlabel: str = None, ylabel: str = None,  show_values: bool = True, 
+                   figsize: tuple = (10, 6), dpi: int = 100,
+                   save_path: str = None, color: str = 'steelblue'):
+    """ 绘制柱状图
+        data: 字典，键为类别名称，值为对应的数值
+        orientation: 柱状图方向，'vertical'（垂直）或'horizontal'（水平）
+        xlabel_rotation: x轴标签旋转角度（度）
+        title: 图表标题
+        xlabel: x轴标签
+        ylabel: y轴标签
+        figsize: 图表尺寸 (宽度, 高度)
+        color: 柱状图颜色
+        show_values: 是否在柱子上显示数值
+    """
+    # 创建图形和坐标轴
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    
+    categories = list(data.keys())
+    values = list(data.values())
+    
+    if orientation == 'vertical':
+        bars = ax.bar(categories, values, color=color, edgecolor='black')
+        
+        # 设置x轴标签旋转
+        plt.setp(ax.get_xticklabels(), rotation=xlabel_rotation, ha='right' if xlabel_rotation != 0 else 'center')
+        
+        # 设置坐标轴标签
+        ax.set_xlabel(xlabel, fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=12)
+        
+        # 在柱子上方显示数值
+        if show_values:
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width() / 2, height + 0.01 * max(values), f'{height}', ha='center', va='bottom', fontsize=9)
+                
+    elif orientation == 'horizontal':
+        bars = ax.barh(categories, values, color=color, edgecolor='black')
+        
+        # 设置y轴标签旋转（如果需要）
+        plt.setp(ax.get_yticklabels(), rotation=xlabel_rotation)
+        
+        # 设置坐标轴标签
+        ax.set_xlabel(ylabel, fontsize=12)
+        ax.set_ylabel(xlabel, fontsize=12)
+        
+        # 在柱子右侧显示数值
+        if show_values:
+            for bar in bars:
+                width = bar.get_width()
+                ax.text(width + 0.01 * max(values), bar.get_y() + bar.get_height() / 2, f'{width}', ha='left', va='center', fontsize=9)
+    else:
+        raise ValueError("orientation 必须是 'vertical' 或 'horizontal'")
+    
+    # 设置标题
+    ax.set_title(title, fontsize=14)
+    # 添加网格线
+    ax.grid(axis='y' if orientation == 'vertical' else 'x', alpha=0.75)
+    plt.tight_layout()
+    
+    # 保存图像
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else '.', exist_ok=True)
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
+        print(f"图像已保存至: {save_path}")
+    
     plt.show()
 
 
