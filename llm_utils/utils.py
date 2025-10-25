@@ -1,9 +1,11 @@
 import os
 import json
 import random
+import time
 import hashlib
 import base64
 import asyncio
+from functools import wraps
 from datetime import datetime, timedelta
 try:
     from transformers import AutoTokenizer, PreTrainedTokenizer
@@ -189,3 +191,32 @@ def find_paths_by_prefix_and_suffix(folder_path, max_depth=1,
             break
     return matched_paths
  
+
+def retry_on_error(num_retry=6, delay=1, backoff=2):
+    """ 重试装饰器 总共执行 1 + num_retry 次
+        num_retry: 重试次数
+        delay: 初始延迟时间(秒)
+        backoff: 延迟倍数
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            current_delay = delay
+            
+            for attempt in range(num_retry + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < num_retry:
+                        print(f"Function {func.__name__} failed: {str(e)}. \nRetrying in {current_delay} seconds... ({attempt + 1}/{num_retry})")
+                        time.sleep(current_delay)
+                        current_delay *= backoff
+                    else:
+                        print(f"Function {func.__name__} failed after {num_retry} retries. \nLast error: {str(e)}")
+            raise last_exception
+        
+        return wrapper
+    return decorator
+
