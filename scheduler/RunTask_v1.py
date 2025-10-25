@@ -22,9 +22,8 @@ class IO_Handle:
 
     num_retry = 0
 
-    def __init__(self, num_retry=None):
-        if num_retry:
-            self.num_retry = num_retry
+    def __init__(self, num_retry=0):
+        self.num_retry = num_retry
     
     def _retry(self, func, *args, **kwargs):
         last_exception = None
@@ -235,7 +234,7 @@ class RunTask(object):
         self.output_queue = multiprocessing.Queue() if parallel_mode == "process" else queue.Queue()
 
         if self.save_mode == "file":
-            self.previous_save_path = self.save_path
+            self.previous_save_path = save_path
         else:
             self.previous_save_path = self.io_handle.find_latest_path(
                 directory = os.path.dirname(save_path), 
