@@ -51,9 +51,9 @@ class VLLM_Server:
     def test_if_available(url, api_key, model_name):
         messages = [{"role": "user", "content": "简单介绍一下你自己"}]
         other_params = {
-            "max_tokens": 42
+            "max_tokens": 128
         }
-        res = send_request_vllm_chat(url=url, api_key=api_key, model_name=model_name, messages=messages, other_params=other_params, timeout=15)
+        res = send_request_vllm_chat(url=url, api_key=api_key, model_name=model_name, messages=messages, other_params=other_params, timeout=60)
         return res["status_code"], res["content"]
 
 
