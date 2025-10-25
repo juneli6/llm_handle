@@ -1,6 +1,7 @@
 import re
 import json
 import ast
+import copy
 from json import JSONDecodeError
 
 
@@ -270,3 +271,65 @@ def extract_last_boxed(text: str):
                 return text[content_start:i]
     
     return None
+
+
+def alpaca_to_messages(sample: dict, default_system = None):
+    messages = []
+
+    system = sample.get("system")
+    if system in ["", None]:
+        system = default_system
+    if system:
+        messages.append({"role": "system", "content": system})
+    
+    history = sample.get("history")
+    if history in ["", None]:
+        history = []
+    for user_content, assistant_content in history:
+        messages.append({"role": "user", "content": user_content})
+        messages.append({"role": "assistant", "content": assistant_content})
+
+    instruction = sample.get("instruction", "")
+    input_text = sample.get("input", "")
+    assert len(instruction + input_text) > 0
+    messages.append({"role": "user", "content": instruction + input_text})
+
+    output = sample.get("output", "")
+    assert output
+    messages.append({"role": "assistant", "content": output})
+
+    return messages
+
+def messages_to_alpaca(messages: list, default_system = None):
+    # system
+    if messages[0]["role"] == "system":
+        system = messages[0]["content"]
+        messages = messages[1:]
+    else:
+        system = default_system
+    
+    # input output
+    assert len(messages) % 2 == 0
+    for i, msg in enumerate(messages):
+        expected_role = "user" if i % 2 == 0 else "assistant"
+        if msg["role"] != expected_role:
+            raise ValueError(f"消息角色顺序错误：位置{i}应该是{expected_role}，实际是{msg['role']}")
+    input_text = messages[-2]["content"]
+    output = messages[-1]["content"]
+    messages = messages[:-2]
+
+    # history
+    history = []
+    for i in range(0, len(messages), 2):
+        history.append([messages[i]["content"], messages[i+1]["content"]])
+    
+    alpaca_data = {
+        "system": system if system else "", 
+        "history": history, 
+        "instruction": "", 
+        "input": input_text, 
+        "output": output
+    }
+
+    return alpaca_data
+

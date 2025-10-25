@@ -16,10 +16,20 @@ def load_json(file_path):
         data = json.load(f)
     return data
 
-def load_jsonl(file_path):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        data = f.readlines()
-    data = [json.loads(i) for i in data]
+def load_jsonl(file_path, errors='replace'):
+    data = []
+    with open(file_path, 'r', encoding='utf-8', errors=errors) as f:
+        for line_idx, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                print("Warning: 跳过空白行")
+                continue
+            try:
+                item = json.loads(line)
+                data.append(item)
+            except json.JSONDecodeError as e:
+                print(f"Warning: 第{line_idx}行JSON解析失败: {e}。\n内容: {line}")
+                continue
     return data
 
 def dump_json(obj, save_path):
@@ -148,3 +158,34 @@ class Tokenizer_Handle:
         else:
             return text_lst_truncated
 
+
+def find_paths_by_prefix_and_suffix(folder_path, max_depth=1, 
+                                    prefix = None, suffix = None, target = "file"):
+    """ 找到指定文件夹下指定前缀和后缀的文件/文件夹
+        max_depth: 1 | "all"
+        target: None | file | folder: 为 None 时对 file 和 folder 都匹配
+            - 注意 target 不是 file 时不要匹配到了节点文件夹
+    """
+    matched_paths = []
+    for root, dirs, files in os.walk(folder_path):
+        if target is None:
+            cands = [*dirs, *files]
+        elif target == "file":
+            cands = files
+        elif target == "folder":
+            cands = dirs
+        else:
+            raise
+
+        for i in cands:
+            if prefix and not i.startswith(prefix):
+                continue
+            if suffix and not i.endswith(suffix):
+                continue
+        
+            matched_paths.append(os.path.join(root, i))
+        
+        if max_depth == 1:
+            break
+    return matched_paths
+ 
