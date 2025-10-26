@@ -149,9 +149,20 @@ class ResourceIterator:
         self.resources = resources or {}
         self.parallel_mode = parallel_mode
         
+        # 锁资源和普通资源
+        self.lock_resources = {}
+        self.normal_resources = {}
+        
         for key, values in self.resources.items():
             if not values:
                 raise ValueError(f"Resource list for '{key}' cannot be empty")
+            
+            if key.endswith("@LOCK"):
+                lock_key = key[:-5]
+                self.lock_resources[lock_key] = values
+            else:
+                self.normal_resources[key] = values
+        
         assert parallel_mode in ["process", "thread"]
         
         # 全局锁和计数器
@@ -160,21 +171,80 @@ class ResourceIterator:
             manager.start()
             self.global_lock = manager.Lock()
             self.counters = manager.dict()
+            # 为锁资源创建锁状态
+            self.lock_states = manager.dict()
         else:
             self.global_lock = threading.Lock()
             self.counters = {}
+            self.lock_states = {}
         
-        for key in self.resources:
+        for key in self.normal_resources:
+            self.counters[key] = 0
+        
+        # 初始化锁资源状态
+        for key, values in self.lock_resources.items():
+            self.lock_states[key] = manager.list([False] * len(values)) if parallel_mode == "process" else [False] * len(values)
             self.counters[key] = 0
     
-    def get(self) -> dict[str, object]:
+    def _get_lock_resource(self, key: str, timeout: float = 60.00) -> object:
+        """获取锁资源，如果没有可用资源则等待直到超时"""
+        values = self.lock_resources[key]
+        lock_states = self.lock_states[key]
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            with self.global_lock:
+                # 查找第一个未被占用的资源
+                for i, (value, is_locked) in enumerate(zip(values, lock_states)):
+                    if not is_locked:
+                        # 标记为已占用并返回
+                        lock_states[i] = True
+                        return value
+            
+            # 如果没有找到可用资源，等待一小段时间后重试
+            time.sleep(0.5)
+        
+        # 超时后按普通逻辑获取下一个资源
+        with self.global_lock:
+            idx = self.counters[key] % len(values)
+            result = values[idx]
+            self.counters[key] += 1
+            print(f"Warning: 锁资源 '{key}' 获取超时，使用轮询方式分配: {result}")
+            return result
+    
+    def _release_lock_resource(self, key: str, resource: object):
+        """释放锁资源"""
+        values = self.lock_resources[key]
+        lock_states = self.lock_states[key]
+        
+        with self.global_lock:
+            for i, value in enumerate(values):
+                if value == resource and lock_states[i]:
+                    lock_states[i] = False
+                    return
+    
+    def get(self, timeout: float = 3600.00) -> dict[str, object]:
         with self.global_lock:
             result = {}
-            for key, values in self.resources.items():
+            
+            # 获取普通资源
+            for key, values in self.normal_resources.items():
                 idx = self.counters[key] % len(values)
                 result[key] = values[idx]
                 self.counters[key] += 1
+            
+            # 获取锁资源
+            for key in self.lock_resources:
+                lock_resource = self._get_lock_resource(key, timeout)
+                result[key] = lock_resource
+            
             return result
+    
+    def release(self, used_resources: dict[str, object]):
+        """释放已使用的锁资源"""
+        for key, resource in used_resources.items():
+            if key in self.lock_resources:
+                self._release_lock_resource(key, resource)
 
 
 class RunTask(object):
@@ -286,10 +356,15 @@ class RunTask(object):
 
     def process_worker(self, chunk_data):
         for data in chunk_data:
-            data["headers"]["resource"] = self.resource_iter.get()
-            status_code, res = self.work_func(data)
-            output_item = {**data, "res": res, "status_code": status_code}
-            self.output_queue.put(json.dumps(output_item, ensure_ascii=False))
+            resources = self.resource_iter.get()
+            data["headers"]["resource"] = resources
+            
+            try:
+                status_code, res = self.work_func(data)
+                output_item = {**data, "res": res, "status_code": status_code}
+                self.output_queue.put(json.dumps(output_item, ensure_ascii=False))
+            finally:
+                self.resource_iter.release(resources)
 
 
     def save_results_to_file(self):
