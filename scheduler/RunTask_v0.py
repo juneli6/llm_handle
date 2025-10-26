@@ -316,6 +316,7 @@ class RunTask(object):
         self.worker_name = "进程" if parallel_mode == "process" else "线程"
         self.output_queue = multiprocessing.Queue() if parallel_mode == "process" else queue.Queue()
 
+        self.io_handle.ensure_directory(os.path.dirname(save_path))
         if self.save_mode == "file":
             self.previous_save_path = save_path
         else:
