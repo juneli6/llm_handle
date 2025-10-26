@@ -146,6 +146,8 @@ class IO_Handle:
 
 class ResourceIterator:
     def __init__(self, resources: dict[str, list] = None, parallel_mode: str = "process"):
+        """ 以 "@LOCK" 结尾是锁资源
+        """
         self.resources = resources or {}
         self.parallel_mode = parallel_mode
         
@@ -167,12 +169,11 @@ class ResourceIterator:
         
         # 全局锁和计数器
         if parallel_mode == "process":
-            manager = SyncManager()
-            manager.start()
-            self.global_lock = manager.Lock()
-            self.counters = manager.dict()
-            # 为锁资源创建锁状态
-            self.lock_states = manager.dict()
+            self.manager = SyncManager()
+            self.manager.start()
+            self.global_lock = self.manager.Lock()
+            self.counters = self.manager.dict()
+            self.lock_states = self.manager.dict()
         else:
             self.global_lock = threading.Lock()
             self.counters = {}
@@ -183,34 +184,38 @@ class ResourceIterator:
         
         # 初始化锁资源状态
         for key, values in self.lock_resources.items():
-            self.lock_states[key] = manager.list([False] * len(values)) if parallel_mode == "process" else [False] * len(values)
+            self.lock_states[key] = self.manager.list([False] * len(values)) if parallel_mode == "process" else [False] * len(values)
             self.counters[key] = 0
     
     def _get_lock_resource(self, key: str, timeout: float = 60.00) -> object:
-        """获取锁资源，如果没有可用资源则等待直到超时"""
+        """获取锁资源，如果没有可用资源则等待直到超时, 注意外部需要加锁"""
         values = self.lock_resources[key]
         lock_states = self.lock_states[key]
         start_time = time.time()
         
         while time.time() - start_time < timeout:
-            with self.global_lock:
-                # 查找第一个未被占用的资源
-                for i, (value, is_locked) in enumerate(zip(values, lock_states)):
-                    if not is_locked:
-                        # 标记为已占用并返回
-                        lock_states[i] = True
-                        return value
+            # 查找第一个未被占用的资源
+            for i, (value, is_locked) in enumerate(zip(values, lock_states)):
+                if not is_locked:
+                    # 标记为已占用并返回
+                    lock_states[i] = True
+                    return value
             
             # 如果没有找到可用资源，等待一小段时间后重试
-            time.sleep(0.5)
+            self.global_lock.release()
+            try:
+                time.sleep(1)
+            finally:
+                self.global_lock.acquire()
         
-        # 超时后按普通逻辑获取下一个资源
-        with self.global_lock:
-            idx = self.counters[key] % len(values)
-            result = values[idx]
-            self.counters[key] += 1
-            print(f"Warning: 锁资源 '{key}' 获取超时，使用轮询方式分配: {result}")
-            return result
+        raise RuntimeError(f"获取锁资源超时：{key}")
+        # 超时后按普通逻辑获取下一个资源，并标记为占用
+        idx = self.counters[key] % len(values)
+        result = values[idx]
+        lock_states[idx] = True
+        self.counters[key] += 1
+        print(f"Warning: 锁资源 '{key}' 获取超时，使用轮询方式分配: {result}")
+        return result
     
     def _release_lock_resource(self, key: str, resource: object):
         """释放锁资源"""
@@ -227,24 +232,32 @@ class ResourceIterator:
         with self.global_lock:
             result = {}
             
-            # 获取普通资源
-            for key, values in self.normal_resources.items():
-                idx = self.counters[key] % len(values)
-                result[key] = values[idx]
-                self.counters[key] += 1
-            
             # 获取锁资源
             for key in self.lock_resources:
                 lock_resource = self._get_lock_resource(key, timeout)
                 result[key] = lock_resource
             
+            # 获取普通资源
+            for key, values in self.normal_resources.items():
+                idx = self.counters[key] % len(values)
+                result[key] = values[idx]
+                self.counters[key] += 1
+
             return result
     
     def release(self, used_resources: dict[str, object]):
         """释放已使用的锁资源"""
         for key, resource in used_resources.items():
+            # 处理原始键名
             if key in self.lock_resources:
                 self._release_lock_resource(key, resource)
+            # 处理带@LOCK后缀的键名
+            elif key.endswith("@LOCK") and key[:-5] in self.lock_resources:
+                self._release_lock_resource(key[:-5], resource)
+    
+    def __del__(self):
+        if hasattr(self, 'manager'):
+            self.manager.shutdown()
 
 
 class RunTask(object):
