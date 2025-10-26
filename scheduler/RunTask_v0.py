@@ -3,74 +3,145 @@ import sys
 import time
 import json
 import random
+import math
+import uuid
 import itertools
 import queue
 import threading
 import multiprocessing
+from datetime import datetime
 from multiprocessing.managers import SyncManager
 from tqdm import tqdm
 from collections import defaultdict
-from functools import wraps
 
 from ..llm_utils.llm_logger import llm_logger
 
 
 
-def _load_jsonl(file_path):
-    data = []
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line_num, line in enumerate(f, 1):
-            line = line.strip()
-            if not line:
-                print("Warning: 跳过空白行")
-                continue
-            try:
-                item = json.loads(line)
-                data.append(item)
-            except json.JSONDecodeError as e:
-                print(f"Warning: 第{line_num}行JSON解析失败: {e}。\n内容：{line}")
-                continue
-    return data
+class IO_Handle:
 
+    num_retry = 0
 
-def _dump_jsonl(data, file_path):
-    with open(file_path, 'w', encoding='utf-8') as jsonl_file:
-        if isinstance(data, list):
-            for item in data:
-                jsonl_file.write(json.dumps(item, ensure_ascii=False, indent=None) + '\n')
-        else:
-            jsonl_file.write(json.dumps(data, ensure_ascii=False, indent=None) + '\n')
-    return
-
-
-def retry_on_error(num_retry=6, delay=1, backoff=2):
-    """ 重试装饰器 总共执行 1 + num_retry 次
-    Args:
-        num_retry: 重试次数
-        delay: 初始延迟时间(秒)
-        backoff: 延迟倍数
-    """
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
-            current_delay = delay
-            
-            for attempt in range(num_retry + 1):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    if attempt < num_retry:
-                        llm_logger.warning(f"Function {func.__name__} failed: {str(e)}. \nRetrying in {current_delay} seconds... ({attempt + 1}/{num_retry})")
-                        time.sleep(current_delay)
-                        current_delay *= backoff
-                    else:
-                        llm_logger.error(f"Function {func.__name__} failed after {num_retry} retries. \nLast error: {str(e)}")
-            raise last_exception
+    def __init__(self, num_retry=0):
+        self.num_retry = num_retry
+    
+    def _retry(self, func, *args, **kwargs):
+        last_exception = None
+        current_delay = 1
+        backoff = 2
         
-        return wrapper
-    return decorator
+        for attempt in range(self.num_retry + 1):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+                if attempt < self.num_retry:
+                    print(f"func failed: {str(e)}. Retrying in {current_delay} seconds...")
+                    time.sleep(current_delay)
+                    current_delay *= backoff
+                else:
+                    print(f"func failed after {self.num_retry} retries.")
+        raise last_exception
+
+    def _load_jsonl(self, file_path, errors='replace'):
+        data = []
+        with open(file_path, 'r', encoding='utf-8', errors=errors) as f:
+            for line_idx, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    print("Warning: 跳过空白行")
+                    continue
+                try:
+                    item = json.loads(line)
+                    data.append(item)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: 第{line_idx}行JSON解析失败: {e}。\n内容: {line}")
+                    continue
+        return data
+    
+    def _dump_jsonl(self, data, file_path):
+        with open(file_path, 'w', encoding='utf-8') as jsonl_file:
+            if isinstance(data, list):
+                for item in data:
+                    jsonl_file.write(json.dumps(item, ensure_ascii=False, indent=None) + '\n')
+            else:
+                jsonl_file.write(json.dumps(data, ensure_ascii=False, indent=None) + '\n')
+        return
+    
+    
+    def ensure_directory(self, name):
+        self._retry(os.makedirs, name=name, exist_ok=True)
+        return
+
+    def load_jsonls_from_folder(self, folder):
+        data = []
+        filenames = [i for i in self._retry(os.listdir, folder) if i.endswith(".jsonl")]
+        for filename in filenames:
+            file_path = os.path.join(folder, filename)
+            data_i = self._retry(self._load_jsonl, file_path)
+            data.extend(data_i)
+        return data
+    
+    def dumps_to_jsonls_folder(self, data, folder, chunk_size=128):
+        """ 将数据分割成多个JSONL文件并保存到指定文件夹
+        """
+        self.ensure_directory(folder)
+
+        if not isinstance(data, list):
+            data = [data]
+        
+        # 计算需要分割的文件数量
+        total_items = len(data)
+        num_files = math.ceil(total_items / chunk_size)
+        print(f"数据总量: {total_items} 条，将分割为 {num_files} 个文件，每个文件最多 {chunk_size} 条")
+        
+        # 分割数据并保存到多个文件
+        for i in range(num_files):
+            start_idx = i * chunk_size
+            end_idx = min(start_idx + chunk_size, total_items)
+            chunk_data = data[start_idx:end_idx]
+            
+            file_path = os.path.join(folder, f"{i}.jsonl")
+            
+            self._retry(self._dump_jsonl, chunk_data, file_path)
+            print(f"生成文件 {file_path}，包含数据：{start_idx}-{end_idx}")
+        return
+    
+    def find_latest_path(self, directory, prefix=None, suffix=None, time_format = "%Y%m%d_%H%M%S"):
+        """ 找到目录下最新的文件或文件夹
+        """
+        all_files: list[str] = self._retry(os.listdir, directory)
+        
+        filtered_files = []
+        for filename in all_files:
+            if prefix and not filename.startswith(prefix):
+                continue
+            if suffix and not filename.endswith(suffix):
+                continue
+            filtered_files.append(filename)
+        
+        if not filtered_files:
+            return None
+        
+        # 找到最新的文件
+        latest_file = None
+        latest_time = None
+        
+        for filename in filtered_files:
+            # 假设删除 prefix 和 suffix 之后刚好是 time 部分
+            time_part = filename
+            if prefix:
+                time_part = time_part.removeprefix(prefix)
+            if suffix:
+                time_part = time_part.removesuffix(suffix)
+            
+            file_time = datetime.strptime(time_part, time_format)
+            
+            if latest_time is None or file_time > latest_time:
+                latest_time = file_time
+                latest_file = filename
+        
+        return os.path.join(directory, latest_file)
 
 
 class ResourceIterator:
@@ -113,11 +184,12 @@ class RunTask(object):
             f_input_data: list[dict] = None, 
             resource: dict[str, list] = None, 
             num_parallel: int = 1, 
-            save_path: str = None, 
             parallel_mode: str = "process", # "process" | "thread"
-            io_retry: bool = False, 
-            buffer_size: int = 1, # 缓冲区大小（条）
-            flush_interval: int = 30, # 强制刷新缓冲区的最大时间间隔（秒）
+            save_path: str = None, # .jsonl 或者 folder
+
+            # 这两个参数只对 save 为文件夹时生效
+            io_num_retry: int = 0, 
+            buffer_size: int = 1, # save 程序的缓冲区大小（条）
         ):
         """ work_func: 该函数在多个进程中执行，不能有全局变量
             f_input_data: list[dict]; dict:
@@ -142,42 +214,53 @@ class RunTask(object):
                     "payload": {...}
                 }
             work_func 必须的输出: status_code: str, res
-
-            buffer_size > 1 时，保存的结果注意按照 data_id 去重，防止极端情况有重复保存的数据
         """
         # 参数
-        assert work_func is not None and f_input_data is not None
         for item in f_input_data:
             assert item.get("headers") is not None and item["headers"].get("data_id") is not None
-        assert save_path is not None and save_path.endswith(".jsonl")
+        
         assert parallel_mode in ["process", "thread"]
 
-        if io_retry:
-            load_jsonl = retry_on_error(num_retry=6)(_load_jsonl)
-            dump_jsonl = retry_on_error(num_retry=6)(_dump_jsonl)
-        else:
-            load_jsonl = _load_jsonl
-            dump_jsonl = _dump_jsonl
+        self.save_mode = "file" if save_path.endswith(".jsonl") else "folder"
+        save_path = save_path.removesuffix("/")
+        assert not save_path.endswith("/")
 
+        self.io_handle = IO_Handle(num_retry=io_num_retry)
 
         self.work_func = work_func
         self.resource_iter = ResourceIterator(resources=resource)
-        self.save_path = save_path
         self.parallel_mode = parallel_mode
         self.worker_name = "进程" if parallel_mode == "process" else "线程"
         self.output_queue = multiprocessing.Queue() if parallel_mode == "process" else queue.Queue()
-        self.buffer_size = buffer_size
-        self.flush_interval = flush_interval
 
+        if self.save_mode == "file":
+            self.previous_save_path = save_path
+        else:
+            self.previous_save_path = self.io_handle.find_latest_path(
+                directory = os.path.dirname(save_path), 
+                prefix = os.path.basename(save_path).removesuffix(".jsonl") + "@", 
+                suffix = None if self.save_mode == "folder" else ".jsonl"
+            )
+        self.save_path = save_path + "@" + datetime.now().strftime("%Y%m%d_%H%M%S") if self.save_mode == "folder" else save_path
+        self.buffer_size = buffer_size
 
         # self.f_input_data_grouped
         try:
             llm_logger.info("开始加载已完成的数据")
-            save_path_data = [i for i in load_jsonl(save_path) if i.get("status_code", "").startswith("2")]
+            if self.save_mode == "file":
+                save_path_data = self.io_handle._load_jsonl(save_path)
+            else:
+                save_path_data = self.io_handle.load_jsonls_from_folder(self.previous_save_path)
+            save_path_data = [i for i in save_path_data if i.get("status_code", "").startswith("2")]
+
             llm_logger.info(f"加载完成，已完成个数：{len(save_path_data)}")
-            llm_logger.info(f"准备更新已完成的数据到：{save_path}")
-            dump_jsonl(save_path_data, save_path)
+            llm_logger.info(f"准备更新已完成的数据到：{self.save_path}")
+            if self.save_mode == "file":
+                self.io_handle._dump_jsonl(save_path_data, save_path)
+            else:
+                self.io_handle.dumps_to_jsonls_folder(save_path_data, self.save_path, chunk_size=buffer_size)
             llm_logger.info("已更新")
+
             save_path_data_ids = set([i["headers"]["data_id"] for i in save_path_data])
             f_input_data = [d for d in tqdm(f_input_data, desc="过滤中") if d["headers"]["data_id"] not in save_path_data_ids]
             llm_logger.info(f"过滤已完成的数据后剩余：{len(f_input_data)}")
@@ -194,7 +277,6 @@ class RunTask(object):
             grouped_data[worker_id].append(fid_item)
         self.f_input_data_grouped = list(grouped_data.values())
 
-
         self.num_input_data = len(f_input_data)
         self.num_parallel = len(self.f_input_data_grouped)
         llm_logger.info(f"任务总长度：{self.num_input_data}")
@@ -210,105 +292,63 @@ class RunTask(object):
             self.output_queue.put(json.dumps(output_item, ensure_ascii=False))
 
 
-    # def save_results(self):
-    #     save_folder = os.path.dirname(self.save_path)
-    #     if not os.path.exists(save_folder):
-    #         os.makedirs(save_folder)
-        
-    #     bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
-    #     with open(self.save_path, "a", encoding="utf-8") as f:
-    #         while True:
-    #             json_line = self.output_queue.get()
-    #             if json_line is None:
-    #                 break
-    #             f.write(str(json_line) + "\n")
-    #             f.flush()
-
-    #             bar.update(1)
-    #             bar.refresh()
-
-    def save_results(self):
-        @retry_on_error(num_retry=6, delay=1, backoff=2)
-        def ensure_directory():
-            save_folder = os.path.dirname(self.save_path)
-            os.makedirs(save_folder, exist_ok=True)
-        
-        def write_buffer(buffer, file_handle):
-            """写入缓冲区数据到已打开的文件"""
-            try:
-                for json_line in buffer:
-                    file_handle.write(str(json_line) + "\n")
-                file_handle.flush()
-                return True
-            except Exception as e:
-                llm_logger.warning(f"写入文件失败，文件句柄可能已失效: {e}")
-                return False
+    def save_results_to_file(self):
+        save_folder = os.path.dirname(self.save_path)
+        os.makedirs(save_folder, exist_ok=True)
         
         bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
-        
+        with open(self.save_path, "a", encoding="utf-8") as f:
+            while True:
+                json_line = self.output_queue.get()
+                if json_line is None:
+                    break
+                f.write(str(json_line) + "\n")
+                f.flush()
+
+                bar.update(1)
+                bar.refresh()
+
+
+    def save_results_to_folder(self):        
+        bar = tqdm(total=self.num_input_data, desc=f"总体进度({self.worker_name})：")
         try:
-            ensure_directory()
+            self.io_handle.ensure_directory(os.path.dirname(self.save_path))
             
             buffer = []
-            file_handle = None
-            last_flush_time = time.time()
-            
             while True:
                 json_line = self.output_queue.get()
                 
                 if json_line is None:
                     # 结束信号
-                    if buffer and file_handle:
-                        write_buffer(buffer, file_handle)
+                    if buffer:
+                        self.io_handle._retry(
+                            self.io_handle._dump_jsonl, 
+                            buffer, 
+                            os.path.join(self.save_path, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.jsonl")
+                        )
                     break
                 
-                # 文件句柄不存在或已失效时，重新打开文件
-                if file_handle is None:
-                    try:
-                        file_handle = open(self.save_path, "a", encoding="utf-8", buffering=-1)
-                        llm_logger.info("文件句柄已创建")
-                    except Exception as e:
-                        llm_logger.error(f"无法打开文件: {e}")
-                        # 将数据放回队列，稍后重试
-                        self.output_queue.put(json_line)
-                        time.sleep(3)
-                        continue
-                
+                json_line = json.loads(json_line)
                 buffer.append(json_line)
                 
-                # 缓冲区达到指定大小或超过刷新间隔时，写入文件
-                current_time = time.time()
-                if len(buffer) >= self.buffer_size or (current_time - last_flush_time) >= self.flush_interval:
-                    success = write_buffer(buffer, file_handle)
-                    if success:
-                        bar.update(len(buffer))
-                        bar.refresh()
-                        buffer = []
-                        last_flush_time = current_time
-                    else:
-                        # 写入失败，关闭文件句柄，下次循环会重新打开
-                        try:
-                            file_handle.close()
-                        except:
-                            pass
-                        file_handle = None
+                # 缓冲区达到指定大小时，写入文件
+                if len(buffer) >= self.buffer_size:
+                    self.io_handle._retry(
+                        self.io_handle._dump_jsonl, 
+                        buffer, 
+                        os.path.join(self.save_path, f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.jsonl")
+                    )
+                    time.sleep(1.1)
+                    buffer = []
+
+                bar.update(1)
+                bar.refresh()
         
         except Exception as e:
             llm_logger.error(f"save 进程失败: {e}")
-            # 尝试保存缓冲区中的数据
-            if buffer and file_handle:
-                try:
-                    write_buffer(buffer, file_handle)
-                except Exception as save_e:
-                    llm_logger.error(f"异常时保存缓冲区数据失败: {save_e}")
             raise
 
         finally:
-            if file_handle:
-                try:
-                    file_handle.close()
-                except:
-                    pass
             bar.close()
 
 
@@ -320,7 +360,8 @@ class RunTask(object):
             p.start()
             processes.append(p)
         
-        save_process = multiprocessing.Process(target=self.save_results, args=())
+        save_results = self.save_results_to_file if self.save_mode == "file" else self.save_results_to_folder
+        save_process = multiprocessing.Process(target=save_results, args=())
         save_process.start()
 
         # 等待所有进程完成
@@ -340,7 +381,8 @@ class RunTask(object):
             t.start()
             threads.append(t)
         
-        save_thread = threading.Thread(target=self.save_results, args=())
+        save_results = self.save_results_to_file if self.save_mode == "file" else self.save_results_to_folder
+        save_thread = threading.Thread(target=save_results, args=())
         save_thread.start()
 
         for t in threads:
@@ -390,8 +432,9 @@ if __name__ == '__main__':
         f_input_data=f_input_data,
         resource=resource,
         num_parallel=3,
-        save_path="output/output_test.jsonl",
         parallel_mode="process", # process | thread
-        io_retry=True
+        save_path="output/output_test.jsonl",
+        io_num_retry=1, 
+        buffer_size=2
     )
     task.start()
